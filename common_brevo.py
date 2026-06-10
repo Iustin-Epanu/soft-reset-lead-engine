@@ -61,15 +61,20 @@ def list_emails(list_id):
 
 def add_to_list(list_id, emails):
     """Add already-existing contacts to a list (fires that list's automation).
-    Batches of 150 per the Brevo API limit. Returns count added."""
+    Endpoint is .../contacts/add. Batches of 150 per the Brevo API limit.
+    Returns count actually added (per Brevo's success array)."""
     added = 0
     emails = list(emails)
     for i in range(0, len(emails), 150):
         chunk = emails[i:i + 150]
-        r = requests.post(f"{BASE}/contacts/lists/{int(list_id)}/contacts", headers=_headers(),
+        r = requests.post(f"{BASE}/contacts/lists/{int(list_id)}/contacts/add", headers=_headers(),
                           json={"emails": chunk}, timeout=30)
         if r.status_code in (201, 204):
-            added += len(chunk)
+            try:
+                succ = r.json().get("contacts", {}).get("success", [])
+                added += len(succ) if succ else len(chunk)
+            except Exception:
+                added += len(chunk)
         else:
             print(f"  ! add_to_list batch {i}: HTTP {r.status_code} {r.text[:160]}")
         time.sleep(0.3)

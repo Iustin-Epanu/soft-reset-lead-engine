@@ -46,6 +46,8 @@ def main():
 
     added = bv.add_to_list(outreach_id, to_send)
     print(f"Added {added} contacts to Outreach list {outreach_id}. Automation will email them.")
+    if added == 0:
+        sys.exit("ERROR: add returned 0 — nothing was queued for sending. Failing the run.")
 
 
 if __name__ == "__main__":
