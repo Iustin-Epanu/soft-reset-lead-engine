@@ -1,0 +1,33 @@
+name: discover-leads
+
+# Mon / Wed / Fri at 11:00 UTC. Refills the Brevo Queue with new IG leads.
+# This is the only job that spends Apify credit — keep it to a few times/week.
+on:
+  schedule:
+    - cron: '0 11 * * 1,3,5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: discover-leads
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python discover.py
+        env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_LIST_ID: ${{ secrets.BREVO_LIST_ID }}
+          BREVO_QUEUE_LIST_ID: ${{ secrets.BREVO_QUEUE_LIST_ID }}
+          # Non-secret config — tweak here anytime:
+          HASHTAGS: gentleparenting,momlife,toddlermom,screentimedetox,momsofinstagram,consciousparenting
+          POSTS_PER_HASHTAG: '60'
+          FOLLOWER_MIN: '10000'
+          FOLLOWER_MAX: '120000'

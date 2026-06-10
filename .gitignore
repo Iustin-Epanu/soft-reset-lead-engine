@@ -1,0 +1,6 @@
+.env
+discovered_raw.csv
+leads_ready.csv
+ledger.csv
+__pycache__/
+*.pyc

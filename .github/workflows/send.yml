@@ -1,0 +1,27 @@
+name: send-outreach
+
+# 3x/day at 13:00, 18:00, 23:00 UTC = ~9am / 2pm / 7pm US-Eastern (EDT).
+# 3 runs x 100 = your 300/day cap, enforced by the schedule itself.
+on:
+  schedule:
+    - cron: '0 13,18,23 * * *'
+  workflow_dispatch: {}   # lets you run it on demand from the Actions tab
+
+concurrency:
+  group: send-outreach
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python send.py --limit 100
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_LIST_ID: ${{ secrets.BREVO_LIST_ID }}
+          BREVO_QUEUE_LIST_ID: ${{ secrets.BREVO_QUEUE_LIST_ID }}
