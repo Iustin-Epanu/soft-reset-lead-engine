@@ -30,6 +30,51 @@ HASHTAG_ACTOR = "apify~instagram-hashtag-scraper"
 PROFILE_ACTOR = "apify~instagram-profile-scraper"
 EMAIL_KEYS = ("public_email", "businessEmail", "business_email", "email")
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+# Strict full-string syntax check (anchored), stricter than the search regex above.
+EMAIL_STRICT_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
+try:
+    import dns.resolver  # dnspython
+    _DNS_OK = True
+except Exception:
+    _DNS_OK = False
+    print("  ! dnspython not installed — MX check disabled, syntax-only filtering.")
+
+_MX_CACHE = {}  # domain -> bool (has a usable mail server)
+
+
+def domain_has_mx(domain):
+    """True if the domain can receive mail (MX, or A-record fallback).
+    Results cached per domain. Transient DNS errors are treated leniently
+    (kept) so a flaky resolver never nukes a whole batch of good leads."""
+    if not _DNS_OK:
+        return True
+    if domain in _MX_CACHE:
+        return _MX_CACHE[domain]
+    ok = True
+    try:
+        answers = dns.resolver.resolve(domain, "MX", lifetime=5)
+        ok = len(answers) > 0
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        # No MX. Some domains accept mail on their A record (implicit MX).
+        try:
+            dns.resolver.resolve(domain, "A", lifetime=5)
+            ok = True
+        except Exception:
+            ok = False
+    except Exception:
+        ok = True  # timeout / NoNameservers / network — be lenient, keep it
+    _MX_CACHE[domain] = ok
+    return ok
+
+
+def valid_email(email):
+    """Syntax check + deliverable-domain (MX) check. Returns True if sendable."""
+    email = (email or "").strip()
+    if not EMAIL_STRICT_RE.match(email):
+        return False
+    domain = email.rsplit("@", 1)[-1].lower()
+    return domain_has_mx(domain)
 
 
 def run_actor(actor, payload):
@@ -109,8 +154,18 @@ def main():
         sys.exit("No handles discovered (check hashtags / Apify credit).")
     profiles = fetch_profiles(usernames)
 
-    candidates = [p for p in profiles if in_band(p["followers"]) and p["email"]]
-    print(f"\n{len(profiles)} profiles, {len(candidates)} in band with an email.")
+    in_band_with_email = [p for p in profiles if in_band(p["followers"]) and p["email"]]
+    # MX/syntax pre-filter: drop undeliverable addresses BEFORE they hit the
+    # Queue, so the send job never burns reputation on bounces.
+    candidates, rejected = [], 0
+    for p in in_band_with_email:
+        if valid_email(p["email"]):
+            candidates.append(p)
+        else:
+            rejected += 1
+            print(f"  - dropped (bad syntax/MX): {p['email']}")
+    print(f"\n{len(profiles)} profiles, {len(in_band_with_email)} in band with an email, "
+          f"{rejected} dropped by MX/syntax filter, {len(candidates)} deliverable.")
 
     # Dedupe against Brevo (source of truth): skip anyone already queued or sent.
     known = bv.list_emails(queue_id)
