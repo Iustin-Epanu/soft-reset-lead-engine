@@ -11,6 +11,9 @@ concurrency:
   group: discover-leads
   cancel-in-progress: false
 
+permissions:
+  contents: write   # lets the job commit the updated dm_worklist.csv back
+
 jobs:
   discover:
     runs-on: ubuntu-latest
@@ -34,3 +37,14 @@ jobs:
           POSTS_PER_HASHTAG: '50'
           FOLLOWER_MIN: '5000'
           FOLLOWER_MAX: '250000'
+      - name: Commit updated DM worklist
+        run: |
+          git config user.name "lead-engine-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f dm_worklist.csv
+          if git diff --cached --quiet; then
+            echo "No new DM leads — nothing to commit."
+          else
+            git commit -m "Update DM worklist [skip ci]"
+            git push
+          fi

@@ -25,12 +25,25 @@ for who's been emailed, so the jobs are stateless and can never double-send.
 ## Files
 | File | Where it runs | Purpose |
 |---|---|---|
-| `discover.py` | cloud (GH Actions) | Apify discovery → add new leads to QUEUE |
+| `discover.py` | cloud (GH Actions) | Apify discovery → emailable leads to QUEUE; no-email leads to DM worklist |
 | `send.py` | cloud (GH Actions) | move 100/day QUEUE → OUTREACH (= send) |
+| `stats.py` | local/anywhere | Brevo stats dashboard via API (no premium needed) — `python stats.py` |
+| `dm_worklist.csv` | auto-updated by cloud | in-band creators with **no email** → DM by hand (see `DM_TEMPLATES.md`) |
+| `DM_TEMPLATES.md` | reference | tier-based Instagram DM scripts + safe-sending rules |
 | `common_brevo.py` | both | Brevo API helpers |
 | `seed_existing.py` | **local, once** | push your 119 existing emails into QUEUE |
 | `.github/workflows/*.yml` | cloud | the cron schedules |
 | `1_/2_/3_*.py` | local (legacy) | the old manual Mac pipeline, still works if you want it |
+
+### Two channels (the funnel reality)
+Instagram no longer exposes business emails to scrapers, so only ~2–3% of
+discovered accounts have a usable (bio) email. On the **free Apify tier (~$5/mo
+≈ 2,700 scrapes)** that's roughly **55–65 emailed leads/month** — a hard ceiling,
+not a bug. Everyone else is captured for the **DM channel**:
+- **Email** → `discover.py` queues in-band accounts that have an email; Brevo sends.
+- **DM** → in-band accounts with *no* email are appended to `dm_worklist.csv`
+  (auto-committed by the cloud run). You DM these by hand, 20–30/day, using
+  `DM_TEMPLATES.md`. Safe, free, and higher-converting for micro creators.
 
 ---
 

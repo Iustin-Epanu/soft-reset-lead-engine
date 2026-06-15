@@ -15,10 +15,15 @@ Run: python discover.py
 """
 import os
 import re
+import csv
 import sys
 import time
+from datetime import datetime, timezone
 import requests
 import common_brevo as bv
+
+WORKLIST_CSV = os.path.join(os.path.dirname(__file__), "dm_worklist.csv")
+WORKLIST_COLS = ["handle", "followers", "full_name", "category", "bio_hook", "profile_url", "discovered", "status"]
 
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "").strip()
 HASHTAGS = [h.strip().lstrip("#") for h in os.getenv("HASHTAGS", "momcontentcreator,momblogger,parentingcoach").split(",") if h.strip()]
@@ -129,6 +134,8 @@ def fetch_profiles(usernames):
                 "name": p.get("fullName") or "",
                 "followers": followers,
                 "email": email,
+                "bio": (p.get("biography") or "").strip(),
+                "category": str(p.get("businessCategoryName") or "").replace("None", "").strip(","),
             })
         time.sleep(1)
     return rows
@@ -139,6 +146,53 @@ def in_band(f):
         return FOLLOWER_MIN <= int(f) <= FOLLOWER_MAX
     except (ValueError, TypeError):
         return False
+
+
+def _bio_hook(bio):
+    """One-line, comma-safe snippet of the bio for personalizing a manual DM."""
+    one = " ".join((bio or "").split())            # collapse newlines/whitespace
+    return one[:140]
+
+
+def append_worklist(dm_candidates):
+    """Append in-band, NO-email accounts to dm_worklist.csv for manual DM outreach.
+    Dedupes by handle against the existing file so re-runs never duplicate.
+    Returns the number of NEW rows written."""
+    existing = set()
+    if os.path.exists(WORKLIST_CSV):
+        with open(WORKLIST_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("handle"):
+                    existing.add(row["handle"].lstrip("@").lower())
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    new_rows = []
+    seen = set()
+    for p in dm_candidates:
+        h = p["username"].lower()
+        if not h or h in existing or h in seen:
+            continue
+        seen.add(h)
+        new_rows.append({
+            "handle": "@" + p["username"],
+            "followers": p["followers"],
+            "full_name": p["name"],
+            "category": p.get("category", ""),
+            "bio_hook": _bio_hook(p.get("bio", "")),
+            "profile_url": f"https://www.instagram.com/{p['username']}",
+            "discovered": today,
+            "status": "",          # you fill: sent / replied / passed
+        })
+
+    if not new_rows:
+        return 0
+    write_header = not os.path.exists(WORKLIST_CSV)
+    with open(WORKLIST_CSV, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=WORKLIST_COLS)
+        if write_header:
+            w.writeheader()
+        w.writerows(new_rows)
+    return len(new_rows)
 
 
 def main():
@@ -166,6 +220,13 @@ def main():
             print(f"  - dropped (bad syntax/MX): {p['email']}")
     print(f"\n{len(profiles)} profiles, {len(in_band_with_email)} in band with an email, "
           f"{rejected} dropped by MX/syntax filter, {len(candidates)} deliverable.")
+
+    # In-band accounts with NO email -> manual-DM worklist (rescues the ~97% the
+    # email pipeline can't use; you DM these by hand, safely, 20-30/day).
+    dm_candidates = [p for p in profiles if in_band(p["followers"]) and not p["email"]]
+    dm_added = append_worklist(dm_candidates)
+    print(f"DM worklist: {len(dm_candidates)} in-band no-email accounts found, "
+          f"{dm_added} new appended to dm_worklist.csv.")
 
     # Dedupe against Brevo (source of truth): skip anyone already queued or sent.
     known = bv.list_emails(queue_id)
