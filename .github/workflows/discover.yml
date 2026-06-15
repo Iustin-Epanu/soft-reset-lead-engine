@@ -27,7 +27,10 @@ jobs:
           BREVO_LIST_ID: ${{ secrets.BREVO_LIST_ID }}
           BREVO_QUEUE_LIST_ID: ${{ secrets.BREVO_QUEUE_LIST_ID }}
           # Non-secret config — tweak here anytime:
-          HASHTAGS: gentleparenting,momlife,toddlermom,screentimedetox,momsofinstagram,consciousparenting
-          POSTS_PER_HASHTAG: '60'
-          FOLLOWER_MIN: '10000'
-          FOLLOWER_MAX: '120000'
+          # Creator/monetizer-dense tags (bloggers, coaches, UGC, mompreneurs) expose
+          # public bio emails far more often than broad personal tags (#momlife etc.),
+          # which were 70% sub-1k personal accounts with no email.
+          HASHTAGS: momcontentcreator,momblogger,parentingcoach,gentleparenting,consciousparenting,motherhoodunplugged,parentinginfluencer,mompreneur
+          POSTS_PER_HASHTAG: '50'
+          FOLLOWER_MIN: '5000'
+          FOLLOWER_MAX: '250000'

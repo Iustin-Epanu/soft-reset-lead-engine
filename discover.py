@@ -21,10 +21,10 @@ import requests
 import common_brevo as bv
 
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "").strip()
-HASHTAGS = [h.strip().lstrip("#") for h in os.getenv("HASHTAGS", "gentleparenting,momlife").split(",") if h.strip()]
-POSTS_PER_HASHTAG = int(os.getenv("POSTS_PER_HASHTAG", "60"))
-FOLLOWER_MIN = int(os.getenv("FOLLOWER_MIN", "10000"))
-FOLLOWER_MAX = int(os.getenv("FOLLOWER_MAX", "120000"))
+HASHTAGS = [h.strip().lstrip("#") for h in os.getenv("HASHTAGS", "momcontentcreator,momblogger,parentingcoach").split(",") if h.strip()]
+POSTS_PER_HASHTAG = int(os.getenv("POSTS_PER_HASHTAG", "50"))
+FOLLOWER_MIN = int(os.getenv("FOLLOWER_MIN", "5000"))
+FOLLOWER_MAX = int(os.getenv("FOLLOWER_MAX", "250000"))
 
 HASHTAG_ACTOR = "apify~instagram-hashtag-scraper"
 PROFILE_ACTOR = "apify~instagram-profile-scraper"
