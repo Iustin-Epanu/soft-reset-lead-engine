@@ -1,10 +1,11 @@
 name: discover-leads
 
-# Mon / Wed / Fri at 11:00 UTC. Refills the Brevo Queue with new IG leads.
-# This is the only job that spends Apify credit — keep it to a few times/week.
+# Hourly, on the hour (UTC). Refills the Brevo Queue with new IG leads.
+# This is the only job that spends Apify credit — running it 24x/day burns
+# far more Apify credit than the old Mon/Wed/Fri cadence (intentional).
 on:
   schedule:
-    - cron: '0 11 * * 1,3,5'
+    - cron: '0 * * * *'
   workflow_dispatch: {}
 
 concurrency:
