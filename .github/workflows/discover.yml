@@ -31,13 +31,15 @@ jobs:
           BREVO_LIST_ID: ${{ secrets.BREVO_LIST_ID }}
           BREVO_QUEUE_LIST_ID: ${{ secrets.BREVO_QUEUE_LIST_ID }}
           # Non-secret config — tweak here anytime:
-          # Creator/monetizer-dense tags (bloggers, coaches, UGC, mompreneurs) expose
-          # public bio emails far more often than broad personal tags (#momlife etc.),
-          # which were 70% sub-1k personal accounts with no email.
-          HASHTAGS: momcontentcreator,momblogger,parentingcoach,gentleparenting,consciousparenting,motherhoodunplugged,parentinginfluencer,mompreneur
-          POSTS_PER_HASHTAG: '50'
-          FOLLOWER_MIN: '5000'
-          FOLLOWER_MAX: '250000'
+          # Wide net (hourly cadence): 34 creator/parenting/montessori/screen-time/UGC
+          # tags spanning distinct author pools. Creator/monetizer-dense tags expose
+          # public bio emails most often; the broader mom-niche tags mostly feed the
+          # manual DM worklist (no-email accounts) — both are wanted. The MX/syntax
+          # filter still protects send reputation from bad addresses.
+          HASHTAGS: momcontentcreator,momblogger,mominfluencer,momcreator,mompreneur,momboss,ugccreator,ugccommunity,parentingcoach,parentinginfluencer,gentleparenting,consciousparenting,respectfulparenting,positiveparenting,attachmentparenting,peacefulparenting,montessoriathome,montessorimom,montessoritoddler,playbasedlearning,screentime,screenfreekids,screenfreeplay,toddleractivities,toddlermom,toddlerlife,preschoolathome,earlychildhoodeducation,parentingtips,parentinghacks,raisingtoddlers,motherhoodunplugged,workingmom,newmom
+          POSTS_PER_HASHTAG: '100'
+          FOLLOWER_MIN: '1000'
+          FOLLOWER_MAX: '1000000'
       - name: Commit updated DM worklist
         run: |
           git config user.name "lead-engine-bot"

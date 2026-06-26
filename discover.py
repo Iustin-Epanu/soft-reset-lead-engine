@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CLOUD JOB — Discover (runs 2-3x/week in GitHub Actions).
+CLOUD JOB — Discover (runs hourly in GitHub Actions).
 
 Apify: parenting hashtags -> recent post authors -> profile lookup (followers,
 bio, public email). Keeps micro/medium accounts that have a usable email and
@@ -110,7 +110,7 @@ def collect_usernames():
 
 
 def fetch_profiles(usernames):
-    rows, CHUNK = [], 25
+    rows, CHUNK = [], 50
     for i in range(0, len(usernames), CHUNK):
         batch = usernames[i:i + CHUNK]
         print(f"[profiles] {i + 1}-{i + len(batch)} of {len(usernames)}")
