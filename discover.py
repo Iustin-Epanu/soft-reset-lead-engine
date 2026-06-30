@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
 """
-CLOUD JOB — Discover (runs hourly in GitHub Actions).
+CLOUD JOB — Discover (runs daily in GitHub Actions).
 
-Apify: parenting hashtags -> recent post authors -> profile lookup (followers,
-bio, public email). Keeps micro/medium accounts that have a usable email and
-upserts the NEW ones into the Brevo QUEUE list (skipping anyone already in
-Queue or Outreach). The send job drains the queue 100/day.
+Apify PUBLIC scrapers (which run on Apify's own residential proxy pool — the free
+"residential proxy"): parenting hashtags -> recent post authors -> profile lookup
+(followers, bio, public email). Keeps micro/medium accounts with a usable email
+and upserts the NEW ones into the Brevo QUEUE list (skipping anyone already in
+Queue or Outreach). No-email in-band accounts go to dm_worklist.csv. The send job
+drains the queue.
 
-No local files, no Playwright — fully cloud. Public email + bio regex only.
+Requires a FREE-plan Apify token — a "CUSTOM" plan that disables public actors
+will 403. No local files, no Playwright — fully cloud.
 
-Env: APIFY_TOKEN, BREVO_API_KEY, BREVO_QUEUE_LIST_ID, BREVO_LIST_ID,
-     HASHTAGS, POSTS_PER_HASHTAG, FOLLOWER_MIN, FOLLOWER_MAX
+Env: APIFY_TOKEN (FREE plan), BREVO_API_KEY, BREVO_QUEUE_LIST_ID, BREVO_LIST_ID,
+     HASHTAGS, POSTS_PER_HASHTAG, FOLLOWER_MIN, FOLLOWER_MAX,
+     HASHTAGS_PER_RUN (rotating window; 0=all),
+     APIFY_MONTHLY_RESULT_CAP (free-tier spend guard; default 1700)
 Run: python discover.py
+
+Cost control: results consumed are tallied per billing cycle in apify_usage.json
+and the run hard-stops at APIFY_MONTHLY_RESULT_CAP, so the Free account never maxes.
 """
 import os
 import re
 import csv
 import sys
+import json
 import time
 from datetime import datetime, timezone
 import requests
@@ -28,9 +37,26 @@ WORKLIST_COLS = ["handle", "followers", "full_name", "category", "bio_hook", "pr
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "").strip()
 HASHTAGS = [h.strip().lstrip("#") for h in os.getenv("HASHTAGS", "momcontentcreator,momblogger,parentingcoach").split(",") if h.strip()]
 POSTS_PER_HASHTAG = int(os.getenv("POSTS_PER_HASHTAG", "50"))
+# Only scrape a rotating window of this many hashtags per run (0 / >=len = all).
+# Keeps each run small + predictable; the window advances daily so every tag in
+# HASHTAGS still gets covered over time. Pair with the monthly cap below.
+HASHTAGS_PER_RUN = int(os.getenv("HASHTAGS_PER_RUN", "0"))
 FOLLOWER_MIN = int(os.getenv("FOLLOWER_MIN", "5000"))
 FOLLOWER_MAX = int(os.getenv("FOLLOWER_MAX", "250000"))
 
+# --- Apify free-tier spend guard -------------------------------------------
+# The Apify FREE plan gives ~$5/month of credit, and Apify's PUBLIC IG scrapers
+# (used below) run on Apify's own residential proxy pool — that's the "free
+# residential proxy": you don't manage it, it's bundled into the ~$2.70/1k result
+# price. We tally results consumed per billing cycle in a committed JSON file
+# (apify_usage.json) and HARD-STOP at the cap so the account never maxes out
+# (which would disable public actors until next cycle). One Free account, forever.
+USAGE_FILE = os.path.join(os.path.dirname(__file__), "apify_usage.json")
+MONTHLY_RESULT_CAP = int(os.getenv("APIFY_MONTHLY_RESULT_CAP", "1700"))
+
+# Public Apify IG scrapers — these run on Apify's residential infra (no sessionids
+# or proxies for us to manage). Require a FREE-plan token; a "CUSTOM" plan that
+# disables public actors will 403 here.
 HASHTAG_ACTOR = "apify~instagram-hashtag-scraper"
 PROFILE_ACTOR = "apify~instagram-profile-scraper"
 EMAIL_KEYS = ("public_email", "businessEmail", "business_email", "email")
@@ -82,21 +108,78 @@ def valid_email(email):
     return domain_has_mx(domain)
 
 
-def run_actor(actor, payload):
+def _cycle_key():
+    """Current Apify billing-cycle bucket (calendar month, UTC)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _load_usage():
+    """Load this cycle's result counter; auto-resets when the month rolls over."""
+    try:
+        with open(USAGE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError, OSError):
+        data = {}
+    if data.get("cycle") != _cycle_key():
+        data = {"cycle": _cycle_key(), "results": 0}
+    return data
+
+
+_USAGE = _load_usage()
+
+
+def results_remaining():
+    """Apify results still allowed this billing cycle (>= 0)."""
+    return max(0, MONTHLY_RESULT_CAP - int(_USAGE.get("results", 0)))
+
+
+def _record_results(n):
+    """Add n consumed results to the cycle counter and persist immediately."""
+    _USAGE["results"] = int(_USAGE.get("results", 0)) + max(0, int(n))
+    try:
+        with open(USAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_USAGE, f)
+    except OSError as e:
+        print(f"  ! could not persist usage counter: {e}")
+
+
+def todays_hashtags():
+    """A rotating window of HASHTAGS_PER_RUN tags. The window advances by day so
+    that, over successive runs, every tag in HASHTAGS gets covered — without any
+    single run paying to scrape the whole set."""
+    n = len(HASHTAGS)
+    if HASHTAGS_PER_RUN <= 0 or HASHTAGS_PER_RUN >= n:
+        return HASHTAGS
+    doy = datetime.now(timezone.utc).timetuple().tm_yday
+    start = (doy * HASHTAGS_PER_RUN) % n
+    return [HASHTAGS[(start + i) % n] for i in range(HASHTAGS_PER_RUN)]
+
+
+def run_actor(actor, payload, cost=True):
+    """Call a public Apify actor synchronously. When cost=True the returned items
+    are billed, so we charge them against the monthly cap counter."""
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
     r = requests.post(url, params={"token": APIFY_TOKEN}, json=payload, timeout=600)
     if r.status_code >= 400:
         print(f"  ! {actor} HTTP {r.status_code}: {r.text[:200]}")
         r.raise_for_status()
-    return r.json()
+    items = r.json()
+    if cost:
+        _record_results(len(items))
+    return items
 
 
 def collect_usernames():
     users = set()
-    for tag in HASHTAGS:
-        print(f"[hashtag] #{tag} (limit {POSTS_PER_HASHTAG})")
+    for tag in todays_hashtags():
+        budget = results_remaining()
+        if budget <= 0:
+            print("  ! monthly Apify cap reached — stopping hashtag scrape.")
+            break
+        limit = min(POSTS_PER_HASHTAG, budget)
+        print(f"[hashtag] #{tag} (limit {limit}, budget left {budget})")
         try:
-            items = run_actor(HASHTAG_ACTOR, {"hashtags": [tag], "resultsLimit": POSTS_PER_HASHTAG})
+            items = run_actor(HASHTAG_ACTOR, {"hashtags": [tag], "resultsLimit": limit})
         except Exception as e:
             print(f"  ! skipped #{tag}: {e}")
             continue
@@ -112,8 +195,13 @@ def collect_usernames():
 def fetch_profiles(usernames):
     rows, CHUNK = [], 50
     for i in range(0, len(usernames), CHUNK):
-        batch = usernames[i:i + CHUNK]
-        print(f"[profiles] {i + 1}-{i + len(batch)} of {len(usernames)}")
+        budget = results_remaining()
+        if budget <= 0:
+            print("  ! monthly Apify cap reached — stopping profile lookups.")
+            break
+        # Never request more profiles than the remaining budget can pay for.
+        batch = usernames[i:i + min(CHUNK, budget)]
+        print(f"[profiles] {i + 1}-{i + len(batch)} of {len(usernames)} (budget left {budget})")
         try:
             items = run_actor(PROFILE_ACTOR, {"usernames": batch})
         except Exception as e:
@@ -203,9 +291,16 @@ def main():
     if not queue_id.isdigit():
         sys.exit("ERROR: BREVO_QUEUE_LIST_ID must be numeric.")
 
+    used = int(_USAGE.get("results", 0))
+    print(f"Apify budget [{_USAGE['cycle']}]: {used}/{MONTHLY_RESULT_CAP} results used, "
+          f"{results_remaining()} left this cycle.")
+    if results_remaining() <= 0:
+        print("Monthly Apify cap already reached — skipping discovery until next cycle.")
+        return
+
     usernames = collect_usernames()
     if not usernames:
-        sys.exit("No handles discovered (check hashtags / Apify credit).")
+        sys.exit("No handles discovered (check hashtags / Apify credit / that the token is a FREE-plan account).")
     profiles = fetch_profiles(usernames)
 
     in_band_with_email = [p for p in profiles if in_band(p["followers"]) and p["email"]]

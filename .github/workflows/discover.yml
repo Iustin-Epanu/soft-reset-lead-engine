@@ -1,11 +1,15 @@
 name: discover-leads
 
-# Hourly, on the hour (UTC). Refills the Brevo Queue with new IG leads.
-# This is the only job that spends Apify credit — running it 24x/day burns
-# far more Apify credit than the old Mon/Wed/Fri cadence (intentional).
+# Once daily (09:00 UTC). Refills the Brevo Queue with new IG leads.
+# This is the only job that spends Apify credit. It is deliberately right-sized
+# to live INSIDE the Apify Free $5/month tier on ONE permanent account: each run
+# scrapes a small rotating window of hashtags, and discover.py hard-stops at
+# APIFY_MONTHLY_RESULT_CAP (tracked in apify_usage.json) so it can never tip into
+# overage. No more swapping Apify accounts. When Creator-plan credits land, raise
+# the cap + POSTS_PER_HASHTAG + HASHTAGS_PER_RUN (and add cron rows) to scale up.
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 9 * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -31,23 +35,31 @@ jobs:
           BREVO_LIST_ID: ${{ secrets.BREVO_LIST_ID }}
           BREVO_QUEUE_LIST_ID: ${{ secrets.BREVO_QUEUE_LIST_ID }}
           # Non-secret config — tweak here anytime:
-          # Wide net (hourly cadence): 34 creator/parenting/montessori/screen-time/UGC
-          # tags spanning distinct author pools. Creator/monetizer-dense tags expose
-          # public bio emails most often; the broader mom-niche tags mostly feed the
-          # manual DM worklist (no-email accounts) — both are wanted. The MX/syntax
-          # filter still protects send reputation from bad addresses.
+          # Full 34-tag net (creator/parenting/montessori/screen-time/UGC), spanning
+          # distinct author pools and already inclusive of lead-engine-2's 20 tags.
+          # Each daily run scrapes only HASHTAGS_PER_RUN of these (a window that
+          # rotates daily), so every tag still gets covered over time while each run
+          # stays cheap. Creator/monetizer-dense tags expose public bio emails most
+          # often; broader mom-niche tags mostly feed the manual DM worklist — both
+          # wanted. The MX/syntax filter still protects send reputation.
           HASHTAGS: momcontentcreator,momblogger,mominfluencer,momcreator,mompreneur,momboss,ugccreator,ugccommunity,parentingcoach,parentinginfluencer,gentleparenting,consciousparenting,respectfulparenting,positiveparenting,attachmentparenting,peacefulparenting,montessoriathome,montessorimom,montessoritoddler,playbasedlearning,screentime,screenfreekids,screenfreeplay,toddleractivities,toddlermom,toddlerlife,preschoolathome,earlychildhoodeducation,parentingtips,parentinghacks,raisingtoddlers,motherhoodunplugged,workingmom,newmom
-          POSTS_PER_HASHTAG: '100'
+          # Right-sized for the Apify Free $5/mo tier (~1,800 results/month):
+          HASHTAGS_PER_RUN: '4'
+          POSTS_PER_HASHTAG: '8'
+          APIFY_MONTHLY_RESULT_CAP: '1700'
           FOLLOWER_MIN: '1000'
           FOLLOWER_MAX: '1000000'
-      - name: Commit updated DM worklist
+      - name: Commit DM worklist + Apify usage counter
+        # apify_usage.json MUST be committed back — GitHub Actions runs are
+        # stateless, so this committed file is how the monthly spend counter
+        # survives between runs and enforces the free-tier cap.
         run: |
           git config user.name "lead-engine-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add -f dm_worklist.csv
+          git add -f dm_worklist.csv apify_usage.json
           if git diff --cached --quiet; then
-            echo "No new DM leads — nothing to commit."
+            echo "Nothing to commit."
           else
-            git commit -m "Update DM worklist [skip ci]"
+            git commit -m "Update DM worklist + Apify usage [skip ci]"
             git push
           fi
