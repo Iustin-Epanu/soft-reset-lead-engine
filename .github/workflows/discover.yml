@@ -1,15 +1,19 @@
 name: discover-leads
 
-# Once daily (09:00 UTC). Refills the Brevo Queue with new IG leads.
-# This is the only job that spends Apify credit. It is deliberately right-sized
-# to live INSIDE the Apify Free $5/month tier on ONE permanent account: each run
-# scrapes a small rotating window of hashtags, and discover.py hard-stops at
-# APIFY_MONTHLY_RESULT_CAP (tracked in apify_usage.json) so it can never tip into
-# overage. No more swapping Apify accounts. When Creator-plan credits land, raise
-# the cap + POSTS_PER_HASHTAG + HASHTAGS_PER_RUN (and add cron rows) to scale up.
+# HOURLY (restored 2026-07-17 — the original cadence from 25c115c, owner request).
+# Refills the Brevo Queue with new IG leads. This is the only job that spends
+# Apify credit, and it lives INSIDE the Apify Free $5/month tier on ONE permanent
+# account: each run scrapes a small rotating hashtag window and discover.py
+# hard-stops at APIFY_MONTHLY_RESULT_CAP (tracked in apify_usage.json), so the
+# account can never max out again (June's un-guarded hourly runs did — that's why
+# df5b10f cut this to daily; the guard makes hourly safe now). Per-run window is
+# trimmed to 1 tag x 8 posts so hourly stretches the credit across ~the first
+# week of each cycle; once the cap is hit, the cheap pre-guard below skips the
+# whole job (no pip, ~5s) until the cycle resets. When Creator-plan credits land,
+# raise the cap + the per-run window to scale up. No more swapping Apify accounts.
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '7 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -24,11 +28,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Cheap pre-guard: when the monthly cap is already spent, skip everything
+      # (hourly runs otherwise waste ~1.5 Actions-minutes each on pip + a no-op).
+      # discover.py still enforces the real guard — this is only an optimization.
+      - id: guard
+        name: Check monthly Apify cap
+        run: |
+          python3 - << 'EOF' >> "$GITHUB_OUTPUT"
+          import json, datetime
+          cap = 1700
+          try:
+              u = json.load(open("apify_usage.json"))
+          except Exception:
+              u = {}
+          cycle = datetime.datetime.utcnow().strftime("%Y-%m")
+          spent = int(u.get("results", 0)) if u.get("cycle") == cycle else 0
+          print(f"proceed={'true' if spent < cap else 'false'}")
+          print(f"spent={spent}")
+          EOF
+      - if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - run: python discover.py
+      - if: steps.guard.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+      - if: steps.guard.outputs.proceed == 'true'
+        run: python discover.py
         env:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
@@ -43,13 +68,17 @@ jobs:
           # often; broader mom-niche tags mostly feed the manual DM worklist — both
           # wanted. The MX/syntax filter still protects send reputation.
           HASHTAGS: momcontentcreator,momblogger,mominfluencer,momcreator,mompreneur,momboss,ugccreator,ugccommunity,parentingcoach,parentinginfluencer,gentleparenting,consciousparenting,respectfulparenting,positiveparenting,attachmentparenting,peacefulparenting,montessoriathome,montessorimom,montessoritoddler,playbasedlearning,screentime,screenfreekids,screenfreeplay,toddleractivities,toddlermom,toddlerlife,preschoolathome,earlychildhoodeducation,parentingtips,parentinghacks,raisingtoddlers,motherhoodunplugged,workingmom,newmom
-          # Right-sized for the Apify Free $5/mo tier (~1,800 results/month):
-          HASHTAGS_PER_RUN: '4'
+          # Right-sized for the Apify Free $5/mo tier (~1,800 results/month).
+          # Hourly cadence -> tiny per-run window (1 tag x 8 posts, the window
+          # rotates so all 34 tags cycle every ~34 hours). Keep the cap in sync
+          # with the hardcoded value in the pre-guard step above.
+          HASHTAGS_PER_RUN: '1'
           POSTS_PER_HASHTAG: '8'
           APIFY_MONTHLY_RESULT_CAP: '1700'
           FOLLOWER_MIN: '1000'
           FOLLOWER_MAX: '1000000'
-      - name: Commit DM worklist + Apify usage counter
+      - if: steps.guard.outputs.proceed == 'true'
+        name: Commit DM worklist + Apify usage counter
         # apify_usage.json MUST be committed back — GitHub Actions runs are
         # stateless, so this committed file is how the monthly spend counter
         # survives between runs and enforces the free-tier cap.
